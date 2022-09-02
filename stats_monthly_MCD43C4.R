@@ -1,896 +1,103 @@
 library(terra)
-library(ncdf4)
+# library(ncdf4)
 
-file_df <- function(input_dir, year, time) {
-  file_list <- list.files(input_dir, pattern = "*.nc", full.names = TRUE, recursive = TRUE)
+in_dir     <- "G:/MCD43C4/v061/nc/daily/0.05"
+vi_list    <- c("EVI", "NDVI", "NIRv", "LSWI", "RED", "NIR")
+out_dir    <- "G:/SIF_comps/csv/mcd43c4"
+
+# Prepare land cover class and % filter
+lc_filter <- rast("G:/MCD12C1/2020/reprocessed/percent/MCD12C1.A2020001.006.Percent_LC_03.tif")
+lc_filter[lc_filter < 90] <- NA
+
+# if (!dir.exists(out_dir)) {
+#   dir.create(out_dir, recursive = TRUE)
+# }
+
+list_nc <- function(in_dir, years, vi_list) {
+  # Create a df of file names for each VI and year.
+  # These are monthly files.
   
-  if (time == "8-day") {
-    dates <- seq(as.Date(paste0(year,"-01-01")), as.Date(paste0((year),"-12-31")), by="days")
+  ncs <- list.files(in_dir, pattern = "*.nc", full.names = TRUE, recursive = TRUE)
+  
+  for (i in 1:length(vi_list)) {
     
-    # Create data frame with column for each 8-day file list
-    for (i in 1:46) {
+    vi_ncs <- ncs[grepl(paste0(vi_list[i], "\\."), ncs)]
+    
+    for (j in 1:length(years)) {
+      year_ncs <- vi_ncs[grepl(years[j], vi_ncs)]
       
-      sub_dates <- dates[(i * 8 - 7):(i * 8)]
-      
-      sub_files <- c()
-      
-      for (j in 1:length(sub_dates)) {
-        
-        check_file <- file_list[grepl(sub_dates[j], file_list)]
-        
-        if (length(check_file) != 0) {
-          sub_files <- c(sub_files, check_file)
-        } else {
-          sub_files <- c(sub_files, NA)
-        }
-      }
-      if (i == 1) {
-        df <- cbind(sub_files)
+      if (j == 1) {
+        year_out_ncs <- year_ncs
       } else {
-        df <- cbind(df, sub_files)
+        year_out_ncs <- c(year_out_ncs, year_ncs)
       }
     }
-  }
-  
-  if (time == "16-day") {
-    dates <- seq(as.Date(paste0(year,"-01-01")), as.Date(paste0((year + 1),"-12-31")), by="days")
     
-    # Create data frame with column for each 16-day file list
-    for (i in 1:23) {
-      
-      sub_dates <- dates[(i * 16 - 15):(i * 16)]
-      
-      sub_files <- c()
-      
-      for (j in 1:length(sub_dates)) {
-        
-        check_file <- file_list[grepl(sub_dates[j], file_list)]
-        
-        if (length(check_file) != 0) {
-          sub_files <- c(sub_files, check_file)
-        } else {
-          sub_files <- c(sub_files, NA)
-        }
-      }
-      if (i == 1) {
-        df <- cbind(sub_files)
-      } else {
-        df <- cbind(df, sub_files)
-      }
+    if (i == 1) {
+      df <- year_out_ncs
+    } else {
+      df <- cbind(df, year_out_ncs)
     }
+    # year_out_ncs        <- data.frame(year_out_ncs)
   }
-  
-  if (time == "month") {
-    dates <- seq(as.Date(paste0(year,"-01-01")), as.Date(paste0(year,"-12-31")), by="days")
-    
-    df <- data.frame(matrix(ncol = 12, nrow = 31))
-    # Create data frame with column for each month
-    for (i in 1:12){
-      if (i < 10) {
-        m <- paste0("0", i)
-      } else {
-        m <- as.character(i)
-      }
-      
-      sub_dates <- subset(dates, format.Date(dates, "%m") == m)
-      sub_files <- c()
-      
-      for (j in 1:length(sub_dates)) {
-        
-        check_file <- file_list[grepl(sub_dates[j], file_list)]
-        
-        if (length(check_file) != 0) {
-          sub_files <- c(sub_files, check_file)
-        } else {
-          sub_files <- c(sub_files, NA)
-        }
-      }
-      
-      # Force length to 31
-      if (length(sub_files) < 31) {
-        sub_files <- sub_files[1:31]
-      }
-      
-      if (i == 1) {
-        df <- cbind(sub_files)
-      } else {
-        df <- cbind(df, sub_files)
-      }
-    }
-  }
-  
+  colnames(df) <- vi_list
   return(df)
 }
-get_ts  <- function(df_f, variable, time, roi) {
+get_ts  <- function(df_f, vi_list, out_dir, roi, lc_filter) {
   
-  annual_df <- data.frame(matrix(ncol = 4, nrow = 0))
-  colnames(annual_df) <- c("Mean", "SD", "SEM", "n")
+  lc_filter <- crop(lc_filter, roi, mask = TRUE, touches = TRUE)
   
-  if (time == "8-day") {
-    t <- 46
-  } else if (time == "16-day") {
-    t <- 23
-  } else if (time == "month") {
-    t <- 12
-  }
-  
-  for (i in 1:t) {
+  for (i in 1:length(vi_list)) {
+    vi_files <- df_f[,i]
     
-    df_t <- df_f[, i]
-    df_t <- df_t[!is.na(df_t)]
-    
-    if (length(df_t) != 0) {
-      for (j in 1:length(df_t)) {
-        nc <- nc_open(df_t[j])
-        
-        # Get data for this time step
-        data <- data.frame(var = ncvar_get(nc, variable))
-        colnames(data)[1] <- variable
-        
-        # Get filters for this time step
-        if (!is.null(filters)) {
-          for (f in 1:length(filters)){
-            data <- cbind(data, f = ncvar_get(nc, filters[f]))
-            colnames(data)[(f + 1)] <- filters[f]
-          }
-        }
-        
-        nc_close(nc)
-        
-        if (j == 1){
-          ts_data <- data
-        } else {
-          ts_data <- rbind(ts_data, data)
-        }
+    for (j in 1:length(vi_files)) {
+      rast_t <- rast(vi_files[j])
+      rast_t <- crop(rast_t, roi, mask = TRUE, touches = TRUE)
+      rast_t <- mask(rast_t, lc_filter)
+      m      <- mean(values(rast_t), na.rm = TRUE)
+      n      <- length(values(rast_t))
+      sd     <- sd(values(rast_t), na.rm = TRUE)
+      sem    <- sd / sqrt(n)
+      
+      row    <- cbind(m, n, sd, sem)
+      
+      if (j == 1) {
+        df <- row
+      } else {
+        df <- rbind(df, row)
       }
-      
-      # filter the data
-      if (!is.null(filters)) {
-        for (f in 1:length(filters)){
-          if (direct[f] == "lt"){
-            ts_data <- ts_data[ts_data[, (f + 1)] <= threshs[f],]
-          } else if (direct[f] == "gt"){
-            ts_data <- ts_data[ts_data[, (f + 1)] >= threshs[f],]
-          } else if (direct[f] == "eq"){
-            ts_data <- ts_data[ts_data[, (f + 1)] == threshs[f],]
-          }
-        }
-      }
-      
-      annual_df[nrow(annual_df) + 1,] <- c(mean(ts_data[, 1], rm.na = TRUE), sd(ts_data[, 1]), sd(ts_data[, 1]) / (sqrt(length(ts_data[, 1]))), length(ts_data[, 1]))
-      
-    } else {
-      annual_df[nrow(annual_df) + 1,] <- c(NA, NA, NA, NA)
     }
+    names(df)     <- c("mean", "n", "sd", "sem")
+    full_out_name <- paste0(out_dir, out_name, vi_list[i], ".csv")
+    write.csv(df, full_out_name, row.names = FALSE)
+    message(paste0("Saved ", full_out_name))
   }
-  
-  return(annual_df)
 }
 
-#### Tropics ####
-out_dir    <- "G:/SIF_comps/csv/tropics/monthly"
-out_name   <- "/Tropics_2019-2021_monthly_"
-files_2019 <- file_df("G:/TROPOMI/esa/extracted/ebf/tropics/2019", 2019, "month")
-files_2020 <- file_df("G:/TROPOMI/esa/extracted/ebf/tropics/2020", 2020, "month")
-files_2021 <- file_df("G:/TROPOMI/esa/extracted/ebf/tropics/2021", 2021, "month")
+### RJA ###
+out_name <- "/RJA_2001-2002_monthly_"
+years    <- c(2001, 2002)
+roi      <- vect("G:/SIF_comps/figs/EC_Sites/RJA/RJA_ebf.shp")
+df_f     <- list_nc(in_dir, years, vi_list)
+get_ts(df_f, vi_list, out_dir, roi, lc_filter)
 
-# SIF relative
-ts_sif_rel_all_2019 <- get_ts(files_2019, "SIF_Rel", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_rel_all_2020 <- get_ts(files_2020, "SIF_Rel", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_rel_all_2021 <- get_ts(files_2021, "SIF_Rel", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_rel_all      <- rbind(ts_sif_rel_all_2019, ts_sif_rel_all_2020, ts_sif_rel_all_2021)
-write.csv(ts_sif_rel_all, paste0(out_dir, out_name, "sif_rel_all.csv"), row.names = FALSE)
+### CAX ###
+out_name <- "/CAX_2001-2003_monthly_"
+years    <- c(2001, 2002, 2003)
+roi      <- vect("G:/SIF_comps/figs/EC_Sites/CAX/CAX_ebf.shp")
+df_f     <- list_nc(in_dir, years, vi_list)
+get_ts(df_f, vi_list, out_dir, roi, lc_filter)
 
-ts_sif_rel_cs_all_2019 <- get_ts(files_2019, "SIF_Rel", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_rel_cs_all_2020 <- get_ts(files_2020, "SIF_Rel", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_rel_cs_all_2021 <- get_ts(files_2021, "SIF_Rel", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_rel_cs_all      <- rbind(ts_sif_rel_cs_all_2019, ts_sif_rel_cs_all_2020, ts_sif_rel_cs_all_2021)
-write.csv(ts_sif_rel_cs_all, paste0(out_dir, out_name, "sif_rel_cs_all.csv"), row.names = FALSE)
+### K34 ###
+out_name <- "/K34_2001-2004_monthly_"
+years    <- c(2001, 2002, 2003, 2004)
+roi      <- vect("G:/SIF_comps/figs/EC_Sites/K34/K34_ebf.shp")
+df_f     <- list_nc(in_dir, years, vi_list)
+get_ts(df_f, vi_list, out_dir, roi, lc_filter)
 
-ts_sif_rel_cs_cold_2019 <- get_ts(files_2019, "SIF_Rel", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_rel_cs_cold_2020 <- get_ts(files_2020, "SIF_Rel", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_rel_cs_cold_2021 <- get_ts(files_2021, "SIF_Rel", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_rel_cs_cold      <- rbind(ts_sif_rel_cs_cold_2019, ts_sif_rel_cs_cold_2020, ts_sif_rel_cs_cold_2021)
-write.csv(ts_sif_rel_cs_cold, paste0(out_dir, out_name, "sif_rel_cs_cold.csv"), row.names = FALSE)
-
-ts_sif_rel_cf_cold_2019 <- get_ts(files_2019, "SIF_Rel", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_rel_cf_cold_2020 <- get_ts(files_2020, "SIF_Rel", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_rel_cf_cold_2021 <- get_ts(files_2021, "SIF_Rel", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_rel_cf_cold      <- rbind(ts_sif_rel_cf_cold_2019, ts_sif_rel_cf_cold_2020, ts_sif_rel_cf_cold_2021)
-write.csv(ts_sif_rel_cf_cold, paste0(out_dir, out_name, "sif_rel_cf_cold.csv"), row.names = FALSE)
-
-# SIF / NIRv_RAD
-ts_sif_nirv_all_2019 <- get_ts(files_2019, "SIF_NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_nirv_all_2020 <- get_ts(files_2020, "SIF_NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_nirv_all_2021 <- get_ts(files_2021, "SIF_NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_nirv_all      <- rbind(ts_sif_nirv_all_2019, ts_sif_nirv_all_2020, ts_sif_nirv_all_2021)
-write.csv(ts_sif_nirv_all, paste0(out_dir, out_name, "sif_nirv_all.csv"), row.names = FALSE)
-
-ts_sif_nirv_cs_all_2019 <- get_ts(files_2019, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_nirv_cs_all_2020 <- get_ts(files_2020, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_nirv_cs_all_2021 <- get_ts(files_2021, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_nirv_cs_all      <- rbind(ts_sif_nirv_cs_all_2019, ts_sif_nirv_cs_all_2020, ts_sif_nirv_cs_all_2021)
-write.csv(ts_sif_nirv_cs_all, paste0(out_dir, out_name, "sif_nirv_cs_all.csv"), row.names = FALSE)
-
-ts_sif_nirv_cs_cold_2019 <- get_ts(files_2019, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_nirv_cs_cold_2020 <- get_ts(files_2020, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_nirv_cs_cold_2021 <- get_ts(files_2021, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_nirv_cs_cold      <- rbind(ts_sif_nirv_cs_cold_2019, ts_sif_nirv_cs_cold_2020, ts_sif_nirv_cs_cold_2021)
-write.csv(ts_sif_nirv_cs_cold, paste0(out_dir, out_name, "sif_nirv_cs_cold.csv"), row.names = FALSE)
-
-ts_sif_nirv_cf_cold_2019 <- get_ts(files_2019, "SIF_NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_nirv_cf_cold_2020 <- get_ts(files_2020, "SIF_NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_nirv_cf_cold_2021 <- get_ts(files_2021, "SIF_NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_nirv_cf_cold      <- rbind(ts_sif_nirv_cf_cold_2019, ts_sif_nirv_cf_cold_2020, ts_sif_nirv_cf_cold_2021)
-write.csv(ts_sif_nirv_cf_cold, paste0(out_dir, out_name, "sif_nirv_cf_cold.csv"), row.names = FALSE)
-
-# # SIF
-# ts_sif_all_2019 <- get_ts(files_2019, "SIF_743", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_sif_all_2020 <- get_ts(files_2020, "SIF_743", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_sif_all_2021 <- get_ts(files_2021, "SIF_743", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_sif_all      <- rbind(ts_sif_all_2019, ts_sif_all_2020, ts_sif_all_2021)
-# write.csv(ts_sif_all, paste0(out_dir, out_name, "sif_all.csv"), row.names = FALSE)
-# 
-# ts_sif_cs_all_2019 <- get_ts(files_2019, "SIF_743", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_sif_cs_all_2020 <- get_ts(files_2020, "SIF_743", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_sif_cs_all_2021 <- get_ts(files_2021, "SIF_743", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_sif_cs_all      <- rbind(ts_sif_cs_all_2019, ts_sif_cs_all_2020, ts_sif_cs_all_2021)
-# write.csv(ts_sif_cs_all, paste0(out_dir, out_name, "sif_cs_all.csv"), row.names = FALSE)
-# 
-# ts_sif_cs_cold_2019 <- get_ts(files_2019, "SIF_743", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_sif_cs_cold_2020 <- get_ts(files_2020, "SIF_743", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_sif_cs_cold_2021 <- get_ts(files_2021, "SIF_743", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_sif_cs_cold      <- rbind(ts_sif_cs_cold_2019, ts_sif_cs_cold_2020, ts_sif_cs_cold_2021)
-# write.csv(ts_sif_cs_cold, paste0(out_dir, out_name, "sif_cs_cold.csv"), row.names = FALSE)
-# 
-# ts_sif_cf_cold_2019 <- get_ts(files_2019, "SIF_743", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_sif_cf_cold_2020 <- get_ts(files_2020, "SIF_743", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_sif_cf_cold_2021 <- get_ts(files_2021, "SIF_743", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_sif_cf_cold      <- rbind(ts_sif_cf_cold_2019, ts_sif_cf_cold_2020, ts_sif_cf_cold_2021)
-# write.csv(ts_sif_cf_cold, paste0(out_dir, out_name, "sif_cf_cold.csv"), row.names = FALSE)
-# 
-# # NIRv
-# ts_nirv_all_2019 <- get_ts(files_2019, "NIRv", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirv_all_2020 <- get_ts(files_2020, "NIRv", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirv_all_2021 <- get_ts(files_2021, "NIRv", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirv_all      <- rbind(ts_nirv_all_2019, ts_nirv_all_2020, ts_nirv_all_2021)
-# write.csv(ts_nirv_all, paste0(out_dir, out_name, "nirv_all.csv"), row.names = FALSE)
-# 
-# ts_nirv_cs_all_2019 <- get_ts(files_2019, "NIRv", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirv_cs_all_2020 <- get_ts(files_2020, "NIRv", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirv_cs_all_2021 <- get_ts(files_2021, "NIRv", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirv_cs_all      <- rbind(ts_nirv_cs_all_2019, ts_nirv_cs_all_2020, ts_nirv_cs_all_2021)
-# write.csv(ts_nirv_cs_all, paste0(out_dir, out_name, "nirv_cs_all.csv"), row.names = FALSE)
-# 
-# ts_nirv_cs_cold_2019 <- get_ts(files_2019, "NIRv", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirv_cs_cold_2020 <- get_ts(files_2020, "NIRv", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirv_cs_cold_2021 <- get_ts(files_2021, "NIRv", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirv_cs_cold      <- rbind(ts_nirv_cs_cold_2019, ts_nirv_cs_cold_2020, ts_nirv_cs_cold_2021)
-# write.csv(ts_nirv_cs_cold, paste0(out_dir, out_name, "nirv_cs_cold.csv"), row.names = FALSE)
-# 
-# ts_nirv_cf_cold_2019 <- get_ts(files_2019, "NIRv", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirv_cf_cold_2020 <- get_ts(files_2020, "NIRv", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirv_cf_cold_2021 <- get_ts(files_2021, "NIRv", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirv_cf_cold      <- rbind(ts_nirv_cf_cold_2019, ts_nirv_cf_cold_2020, ts_nirv_cf_cold_2021)
-# write.csv(ts_nirv_cf_cold, paste0(out_dir, out_name, "nirv_cf_cold.csv"), row.names = FALSE)
-# 
-# # NIRv R
-# ts_nirvr_all_2019 <- get_ts(files_2019, "NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirvr_all_2020 <- get_ts(files_2020, "NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirvr_all_2021 <- get_ts(files_2021, "NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirvr_all      <- rbind(ts_nirvr_all_2019, ts_nirvr_all_2020, ts_nirvr_all_2021)
-# write.csv(ts_nirvr_all, paste0(out_dir, out_name, "nirvr_all.csv"), row.names = FALSE)
-# 
-# ts_nirvr_cs_all_2019 <- get_ts(files_2019, "NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirvr_cs_all_2020 <- get_ts(files_2020, "NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirvr_cs_all_2021 <- get_ts(files_2021, "NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirvr_cs_all      <- rbind(ts_nirvr_cs_all_2019, ts_nirvr_cs_all_2020, ts_nirvr_cs_all_2021)
-# write.csv(ts_nirvr_cs_all, paste0(out_dir, out_name, "nirvr_cs_all.csv"), row.names = FALSE)
-# 
-# ts_nirvr_cs_cold_2019 <- get_ts(files_2019, "NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirvr_cs_cold_2020 <- get_ts(files_2020, "NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirvr_cs_cold_2021 <- get_ts(files_2021, "NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirvr_cs_cold      <- rbind(ts_nirvr_cs_cold_2019, ts_nirvr_cs_cold_2020, ts_nirvr_cs_cold_2021)
-# write.csv(ts_nirvr_cs_cold, paste0(out_dir, out_name, "nirvr_cs_cold.csv"), row.names = FALSE)
-# 
-# ts_nirvr_cf_cold_2019 <- get_ts(files_2019, "NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirvr_cf_cold_2020 <- get_ts(files_2020, "NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirvr_cf_cold_2021 <- get_ts(files_2021, "NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirvr_cf_cold      <- rbind(ts_nirvr_cf_cold_2019, ts_nirvr_cf_cold_2020, ts_nirvr_cf_cold_2021)
-# write.csv(ts_nirvr_cf_cold, paste0(out_dir, out_name, "nirvr_cf_cold.csv"), row.names = FALSE)
-# 
-# # Red
-# ts_red_all_2019 <- get_ts(files_2019, "RED", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_red_all_2020 <- get_ts(files_2020, "RED", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_red_all_2021 <- get_ts(files_2021, "RED", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_red_all      <- rbind(ts_red_all_2019, ts_red_all_2020, ts_red_all_2021)
-# write.csv(ts_red_all, paste0(out_dir, out_name, "red_all.csv"), row.names = FALSE)
-# 
-# ts_red_cs_all_2019 <- get_ts(files_2019, "RED", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_red_cs_all_2020 <- get_ts(files_2020, "RED", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_red_cs_all_2021 <- get_ts(files_2021, "RED", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_red_cs_all      <- rbind(ts_red_cs_all_2019, ts_red_cs_all_2020, ts_red_cs_all_2021)
-# write.csv(ts_red_cs_all, paste0(out_dir, out_name, "red_cs_all.csv"), row.names = FALSE)
-# 
-# ts_red_cs_cold_2019 <- get_ts(files_2019, "RED", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_red_cs_cold_2020 <- get_ts(files_2020, "RED", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_red_cs_cold_2021 <- get_ts(files_2021, "RED", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_red_cs_cold      <- rbind(ts_red_cs_cold_2019, ts_red_cs_cold_2020, ts_red_cs_cold_2021)
-# write.csv(ts_red_cs_cold, paste0(out_dir, out_name, "red_cs_cold.csv"), row.names = FALSE)
-# 
-# ts_red_cf_cold_2019 <- get_ts(files_2019, "RED", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_red_cf_cold_2020 <- get_ts(files_2020, "RED", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_red_cf_cold_2021 <- get_ts(files_2021, "RED", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_red_cf_cold      <- rbind(ts_red_cf_cold_2019, ts_red_cf_cold_2020, ts_red_cf_cold_2021)
-# write.csv(ts_red_cf_cold, paste0(out_dir, out_name, "red_cf_cold.csv"), row.names = FALSE)
-# 
-# # NIR
-# ts_nir_all_2019 <- get_ts(files_2019, "NIR", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nir_all_2020 <- get_ts(files_2020, "NIR", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nir_all_2021 <- get_ts(files_2021, "NIR", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nir_all      <- rbind(ts_nir_all_2019, ts_nir_all_2020, ts_nir_all_2021)
-# write.csv(ts_nir_all, paste0(out_dir, out_name, "nir_all.csv"), row.names = FALSE)
-# 
-# ts_nir_cs_all_2019 <- get_ts(files_2019, "NIR", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nir_cs_all_2020 <- get_ts(files_2020, "NIR", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nir_cs_all_2021 <- get_ts(files_2021, "NIR", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nir_cs_all      <- rbind(ts_nir_cs_all_2019, ts_nir_cs_all_2020, ts_nir_cs_all_2021)
-# write.csv(ts_nir_cs_all, paste0(out_dir, out_name, "nir_cs_all.csv"), row.names = FALSE)
-# 
-# ts_nir_cs_cold_2019 <- get_ts(files_2019, "NIR", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nir_cs_cold_2020 <- get_ts(files_2020, "NIR", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nir_cs_cold_2021 <- get_ts(files_2021, "NIR", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nir_cs_cold      <- rbind(ts_nir_cs_cold_2019, ts_nir_cs_cold_2020, ts_nir_cs_cold_2021)
-# write.csv(ts_nir_cs_cold, paste0(out_dir, out_name, "nir_cs_cold.csv"), row.names = FALSE)
-# 
-# ts_nir_cf_cold_2019 <- get_ts(files_2019, "NIR", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nir_cf_cold_2020 <- get_ts(files_2020, "NIR", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nir_cf_cold_2021 <- get_ts(files_2021, "NIR", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nir_cf_cold      <- rbind(ts_nir_cf_cold_2019, ts_nir_cf_cold_2020, ts_nir_cf_cold_2021)
-# write.csv(ts_nir_cf_cold, paste0(out_dir, out_name, "nir_cf_cold.csv"), row.names = FALSE)
-
-#### Amazon ####
-out_dir    <- "G:/SIF_comps/csv/amazon/monthly"
-out_name   <- "/Amazon_2019-2021_monthly_"
-files_2019 <- file_df("G:/TROPOMI/esa/extracted/ebf/amazon/2019", 2019, "month")
-files_2020 <- file_df("G:/TROPOMI/esa/extracted/ebf/amazon/2020", 2020, "month")
-files_2021 <- file_df("G:/TROPOMI/esa/extracted/ebf/amazon/2021", 2021, "month")
-
-# SIF relative
-ts_sif_rel_all_2019 <- get_ts(files_2019, "SIF_Rel", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_rel_all_2020 <- get_ts(files_2020, "SIF_Rel", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_rel_all_2021 <- get_ts(files_2021, "SIF_Rel", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_rel_all      <- rbind(ts_sif_rel_all_2019, ts_sif_rel_all_2020, ts_sif_rel_all_2021)
-write.csv(ts_sif_rel_all, paste0(out_dir, out_name, "sif_rel_all.csv"), row.names = FALSE)
-
-ts_sif_rel_cs_all_2019 <- get_ts(files_2019, "SIF_Rel", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_rel_cs_all_2020 <- get_ts(files_2020, "SIF_Rel", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_rel_cs_all_2021 <- get_ts(files_2021, "SIF_Rel", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_rel_cs_all      <- rbind(ts_sif_rel_cs_all_2019, ts_sif_rel_cs_all_2020, ts_sif_rel_cs_all_2021)
-write.csv(ts_sif_rel_cs_all, paste0(out_dir, out_name, "sif_rel_cs_all.csv"), row.names = FALSE)
-
-ts_sif_rel_cs_cold_2019 <- get_ts(files_2019, "SIF_Rel", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_rel_cs_cold_2020 <- get_ts(files_2020, "SIF_Rel", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_rel_cs_cold_2021 <- get_ts(files_2021, "SIF_Rel", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_rel_cs_cold      <- rbind(ts_sif_rel_cs_cold_2019, ts_sif_rel_cs_cold_2020, ts_sif_rel_cs_cold_2021)
-write.csv(ts_sif_rel_cs_cold, paste0(out_dir, out_name, "sif_rel_cs_cold.csv"), row.names = FALSE)
-
-ts_sif_rel_cf_cold_2019 <- get_ts(files_2019, "SIF_Rel", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_rel_cf_cold_2020 <- get_ts(files_2020, "SIF_Rel", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_rel_cf_cold_2021 <- get_ts(files_2021, "SIF_Rel", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_rel_cf_cold      <- rbind(ts_sif_rel_cf_cold_2019, ts_sif_rel_cf_cold_2020, ts_sif_rel_cf_cold_2021)
-write.csv(ts_sif_rel_cf_cold, paste0(out_dir, out_name, "sif_rel_cf_cold.csv"), row.names = FALSE)
-
-# SIF / NIRv_RAD
-ts_sif_nirv_all_2019 <- get_ts(files_2019, "SIF_NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_nirv_all_2020 <- get_ts(files_2020, "SIF_NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_nirv_all_2021 <- get_ts(files_2021, "SIF_NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_nirv_all      <- rbind(ts_sif_nirv_all_2019, ts_sif_nirv_all_2020, ts_sif_nirv_all_2021)
-write.csv(ts_sif_nirv_all, paste0(out_dir, out_name, "sif_nirv_all.csv"), row.names = FALSE)
-
-ts_sif_nirv_cs_all_2019 <- get_ts(files_2019, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_nirv_cs_all_2020 <- get_ts(files_2020, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_nirv_cs_all_2021 <- get_ts(files_2021, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_nirv_cs_all      <- rbind(ts_sif_nirv_cs_all_2019, ts_sif_nirv_cs_all_2020, ts_sif_nirv_cs_all_2021)
-write.csv(ts_sif_nirv_cs_all, paste0(out_dir, out_name, "sif_nirv_cs_all.csv"), row.names = FALSE)
-
-ts_sif_nirv_cs_cold_2019 <- get_ts(files_2019, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_nirv_cs_cold_2020 <- get_ts(files_2020, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_nirv_cs_cold_2021 <- get_ts(files_2021, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_nirv_cs_cold      <- rbind(ts_sif_nirv_cs_cold_2019, ts_sif_nirv_cs_cold_2020, ts_sif_nirv_cs_cold_2021)
-write.csv(ts_sif_nirv_cs_cold, paste0(out_dir, out_name, "sif_nirv_cs_cold.csv"), row.names = FALSE)
-
-ts_sif_nirv_cf_cold_2019 <- get_ts(files_2019, "SIF_NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_nirv_cf_cold_2020 <- get_ts(files_2020, "SIF_NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_nirv_cf_cold_2021 <- get_ts(files_2021, "SIF_NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_nirv_cf_cold      <- rbind(ts_sif_nirv_cf_cold_2019, ts_sif_nirv_cf_cold_2020, ts_sif_nirv_cf_cold_2021)
-write.csv(ts_sif_nirv_cf_cold, paste0(out_dir, out_name, "sif_nirv_cf_cold.csv"), row.names = FALSE)
-
-# #SIF
-# ts_sif_all_2019 <- get_ts(files_2019, "SIF_743", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_sif_all_2020 <- get_ts(files_2020, "SIF_743", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_sif_all_2021 <- get_ts(files_2021, "SIF_743", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_sif_all      <- rbind(ts_sif_all_2019, ts_sif_all_2020, ts_sif_all_2021)
-# write.csv(ts_sif_all, paste0(out_dir, out_name, "sif_all.csv"), row.names = FALSE)
-# 
-# ts_sif_cs_all_2019 <- get_ts(files_2019, "SIF_743", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_sif_cs_all_2020 <- get_ts(files_2020, "SIF_743", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_sif_cs_all_2021 <- get_ts(files_2021, "SIF_743", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_sif_cs_all      <- rbind(ts_sif_cs_all_2019, ts_sif_cs_all_2020, ts_sif_cs_all_2021)
-# write.csv(ts_sif_cs_all, paste0(out_dir, out_name, "sif_cs_all.csv"), row.names = FALSE)
-# 
-# ts_sif_cs_cold_2019 <- get_ts(files_2019, "SIF_743", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_sif_cs_cold_2020 <- get_ts(files_2020, "SIF_743", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_sif_cs_cold_2021 <- get_ts(files_2021, "SIF_743", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_sif_cs_cold      <- rbind(ts_sif_cs_cold_2019, ts_sif_cs_cold_2020, ts_sif_cs_cold_2021)
-# write.csv(ts_sif_cs_cold, paste0(out_dir, out_name, "sif_cs_cold.csv"), row.names = FALSE)
-# 
-# ts_sif_cf_cold_2019 <- get_ts(files_2019, "SIF_743", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_sif_cf_cold_2020 <- get_ts(files_2020, "SIF_743", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_sif_cf_cold_2021 <- get_ts(files_2021, "SIF_743", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_sif_cf_cold      <- rbind(ts_sif_cf_cold_2019, ts_sif_cf_cold_2020, ts_sif_cf_cold_2021)
-# write.csv(ts_sif_cf_cold, paste0(out_dir, out_name, "sif_cf_cold.csv"), row.names = FALSE)
-# 
-# # NIRv
-# ts_nirv_all_2019 <- get_ts(files_2019, "NIRv", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirv_all_2020 <- get_ts(files_2020, "NIRv", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirv_all_2021 <- get_ts(files_2021, "NIRv", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirv_all      <- rbind(ts_nirv_all_2019, ts_nirv_all_2020, ts_nirv_all_2021)
-# write.csv(ts_nirv_all, paste0(out_dir, out_name, "nirv_all.csv"), row.names = FALSE)
-# 
-# ts_nirv_cs_all_2019 <- get_ts(files_2019, "NIRv", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirv_cs_all_2020 <- get_ts(files_2020, "NIRv", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirv_cs_all_2021 <- get_ts(files_2021, "NIRv", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirv_cs_all      <- rbind(ts_nirv_cs_all_2019, ts_nirv_cs_all_2020, ts_nirv_cs_all_2021)
-# write.csv(ts_nirv_cs_all, paste0(out_dir, out_name, "nirv_cs_all.csv"), row.names = FALSE)
-# 
-# ts_nirv_cs_cold_2019 <- get_ts(files_2019, "NIRv", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirv_cs_cold_2020 <- get_ts(files_2020, "NIRv", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirv_cs_cold_2021 <- get_ts(files_2021, "NIRv", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirv_cs_cold      <- rbind(ts_nirv_cs_cold_2019, ts_nirv_cs_cold_2020, ts_nirv_cs_cold_2021)
-# write.csv(ts_nirv_cs_cold, paste0(out_dir, out_name, "nirv_cs_cold.csv"), row.names = FALSE)
-# 
-# ts_nirv_cf_cold_2019 <- get_ts(files_2019, "NIRv", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirv_cf_cold_2020 <- get_ts(files_2020, "NIRv", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirv_cf_cold_2021 <- get_ts(files_2021, "NIRv", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirv_cf_cold      <- rbind(ts_nirv_cf_cold_2019, ts_nirv_cf_cold_2020, ts_nirv_cf_cold_2021)
-# write.csv(ts_nirv_cf_cold, paste0(out_dir, out_name, "nirv_cf_cold.csv"), row.names = FALSE)
-# 
-# # NIRv R
-# ts_nirvr_all_2019 <- get_ts(files_2019, "NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirvr_all_2020 <- get_ts(files_2020, "NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirvr_all_2021 <- get_ts(files_2021, "NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirvr_all      <- rbind(ts_nirvr_all_2019, ts_nirvr_all_2020, ts_nirvr_all_2021)
-# write.csv(ts_nirvr_all, paste0(out_dir, out_name, "nirvr_all.csv"), row.names = FALSE)
-# 
-# ts_nirvr_cs_all_2019 <- get_ts(files_2019, "NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirvr_cs_all_2020 <- get_ts(files_2020, "NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirvr_cs_all_2021 <- get_ts(files_2021, "NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirvr_cs_all      <- rbind(ts_nirvr_cs_all_2019, ts_nirvr_cs_all_2020, ts_nirvr_cs_all_2021)
-# write.csv(ts_nirvr_cs_all, paste0(out_dir, out_name, "nirvr_cs_all.csv"), row.names = FALSE)
-# 
-# ts_nirvr_cs_cold_2019 <- get_ts(files_2019, "NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirvr_cs_cold_2020 <- get_ts(files_2020, "NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirvr_cs_cold_2021 <- get_ts(files_2021, "NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirvr_cs_cold      <- rbind(ts_nirvr_cs_cold_2019, ts_nirvr_cs_cold_2020, ts_nirvr_cs_cold_2021)
-# write.csv(ts_nirvr_cs_cold, paste0(out_dir, out_name, "nirvr_cs_cold.csv"), row.names = FALSE)
-# 
-# ts_nirvr_cf_cold_2019 <- get_ts(files_2019, "NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirvr_cf_cold_2020 <- get_ts(files_2020, "NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirvr_cf_cold_2021 <- get_ts(files_2021, "NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirvr_cf_cold      <- rbind(ts_nirvr_cf_cold_2019, ts_nirvr_cf_cold_2020, ts_nirvr_cf_cold_2021)
-# write.csv(ts_nirvr_cf_cold, paste0(out_dir, out_name, "nirvr_cf_cold.csv"), row.names = FALSE)
-# 
-# # Red
-# ts_red_all_2019 <- get_ts(files_2019, "RED", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_red_all_2020 <- get_ts(files_2020, "RED", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_red_all_2021 <- get_ts(files_2021, "RED", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_red_all      <- rbind(ts_red_all_2019, ts_red_all_2020, ts_red_all_2021)
-# write.csv(ts_red_all, paste0(out_dir, out_name, "red_all.csv"), row.names = FALSE)
-# 
-# ts_red_cs_all_2019 <- get_ts(files_2019, "RED", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_red_cs_all_2020 <- get_ts(files_2020, "RED", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_red_cs_all_2021 <- get_ts(files_2021, "RED", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_red_cs_all      <- rbind(ts_red_cs_all_2019, ts_red_cs_all_2020, ts_red_cs_all_2021)
-# write.csv(ts_red_cs_all, paste0(out_dir, out_name, "red_cs_all.csv"), row.names = FALSE)
-# 
-# ts_red_cs_cold_2019 <- get_ts(files_2019, "RED", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_red_cs_cold_2020 <- get_ts(files_2020, "RED", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_red_cs_cold_2021 <- get_ts(files_2021, "RED", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_red_cs_cold      <- rbind(ts_red_cs_cold_2019, ts_red_cs_cold_2020, ts_red_cs_cold_2021)
-# write.csv(ts_red_cs_cold, paste0(out_dir, out_name, "red_cs_cold.csv"), row.names = FALSE)
-# 
-# ts_red_cf_cold_2019 <- get_ts(files_2019, "RED", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_red_cf_cold_2020 <- get_ts(files_2020, "RED", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_red_cf_cold_2021 <- get_ts(files_2021, "RED", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_red_cf_cold      <- rbind(ts_red_cf_cold_2019, ts_red_cf_cold_2020, ts_red_cf_cold_2021)
-# write.csv(ts_red_cf_cold, paste0(out_dir, out_name, "red_cf_cold.csv"), row.names = FALSE)
-# 
-# # NIR
-# ts_nir_all_2019 <- get_ts(files_2019, "NIR", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nir_all_2020 <- get_ts(files_2020, "NIR", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nir_all_2021 <- get_ts(files_2021, "NIR", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nir_all      <- rbind(ts_nir_all_2019, ts_nir_all_2020, ts_nir_all_2021)
-# write.csv(ts_nir_all, paste0(out_dir, out_name, "nir_all.csv"), row.names = FALSE)
-# 
-# ts_nir_cs_all_2019 <- get_ts(files_2019, "NIR", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nir_cs_all_2020 <- get_ts(files_2020, "NIR", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nir_cs_all_2021 <- get_ts(files_2021, "NIR", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nir_cs_all      <- rbind(ts_nir_cs_all_2019, ts_nir_cs_all_2020, ts_nir_cs_all_2021)
-# write.csv(ts_nir_cs_all, paste0(out_dir, out_name, "nir_cs_all.csv"), row.names = FALSE)
-# 
-# ts_nir_cs_cold_2019 <- get_ts(files_2019, "NIR", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nir_cs_cold_2020 <- get_ts(files_2020, "NIR", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nir_cs_cold_2021 <- get_ts(files_2021, "NIR", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nir_cs_cold      <- rbind(ts_nir_cs_cold_2019, ts_nir_cs_cold_2020, ts_nir_cs_cold_2021)
-# write.csv(ts_nir_cs_cold, paste0(out_dir, out_name, "nir_cs_cold.csv"), row.names = FALSE)
-# 
-# ts_nir_cf_cold_2019 <- get_ts(files_2019, "NIR", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nir_cf_cold_2020 <- get_ts(files_2020, "NIR", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nir_cf_cold_2021 <- get_ts(files_2021, "NIR", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nir_cf_cold      <- rbind(ts_nir_cf_cold_2019, ts_nir_cf_cold_2020, ts_nir_cf_cold_2021)
-# write.csv(ts_nir_cf_cold, paste0(out_dir, out_name, "nir_cf_cold.csv"), row.names = FALSE)
-
-#### Africa ####
-out_dir    <- "G:/SIF_comps/csv/africa/monthly"
-out_name   <- "/Africa_2019-2021_monthly_"
-files_2019 <- file_df("G:/TROPOMI/esa/extracted/ebf/africa/2019", 2019, "month")
-files_2020 <- file_df("G:/TROPOMI/esa/extracted/ebf/africa/2020", 2020, "month")
-files_2021 <- file_df("G:/TROPOMI/esa/extracted/ebf/africa/2021", 2021, "month")
-
-# SIF relative
-ts_sif_rel_all_2019 <- get_ts(files_2019, "SIF_Rel", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_rel_all_2020 <- get_ts(files_2020, "SIF_Rel", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_rel_all_2021 <- get_ts(files_2021, "SIF_Rel", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_rel_all      <- rbind(ts_sif_rel_all_2019, ts_sif_rel_all_2020, ts_sif_rel_all_2021)
-write.csv(ts_sif_rel_all, paste0(out_dir, out_name, "sif_rel_all.csv"), row.names = FALSE)
-
-ts_sif_rel_cs_all_2019 <- get_ts(files_2019, "SIF_Rel", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_rel_cs_all_2020 <- get_ts(files_2020, "SIF_Rel", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_rel_cs_all_2021 <- get_ts(files_2021, "SIF_Rel", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_rel_cs_all      <- rbind(ts_sif_rel_cs_all_2019, ts_sif_rel_cs_all_2020, ts_sif_rel_cs_all_2021)
-write.csv(ts_sif_rel_cs_all, paste0(out_dir, out_name, "sif_rel_cs_all.csv"), row.names = FALSE)
-
-ts_sif_rel_cs_cold_2019 <- get_ts(files_2019, "SIF_Rel", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_rel_cs_cold_2020 <- get_ts(files_2020, "SIF_Rel", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_rel_cs_cold_2021 <- get_ts(files_2021, "SIF_Rel", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_rel_cs_cold      <- rbind(ts_sif_rel_cs_cold_2019, ts_sif_rel_cs_cold_2020, ts_sif_rel_cs_cold_2021)
-write.csv(ts_sif_rel_cs_cold, paste0(out_dir, out_name, "sif_rel_cs_cold.csv"), row.names = FALSE)
-
-ts_sif_rel_cf_cold_2019 <- get_ts(files_2019, "SIF_Rel", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_rel_cf_cold_2020 <- get_ts(files_2020, "SIF_Rel", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_rel_cf_cold_2021 <- get_ts(files_2021, "SIF_Rel", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_rel_cf_cold      <- rbind(ts_sif_rel_cf_cold_2019, ts_sif_rel_cf_cold_2020, ts_sif_rel_cf_cold_2021)
-write.csv(ts_sif_rel_cf_cold, paste0(out_dir, out_name, "sif_rel_cf_cold.csv"), row.names = FALSE)
-
-# SIF / NIRv_RAD
-ts_sif_nirv_all_2019 <- get_ts(files_2019, "SIF_NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_nirv_all_2020 <- get_ts(files_2020, "SIF_NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_nirv_all_2021 <- get_ts(files_2021, "SIF_NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_nirv_all      <- rbind(ts_sif_nirv_all_2019, ts_sif_nirv_all_2020, ts_sif_nirv_all_2021)
-write.csv(ts_sif_nirv_all, paste0(out_dir, out_name, "sif_nirv_all.csv"), row.names = FALSE)
-
-ts_sif_nirv_cs_all_2019 <- get_ts(files_2019, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_nirv_cs_all_2020 <- get_ts(files_2020, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_nirv_cs_all_2021 <- get_ts(files_2021, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_nirv_cs_all      <- rbind(ts_sif_nirv_cs_all_2019, ts_sif_nirv_cs_all_2020, ts_sif_nirv_cs_all_2021)
-write.csv(ts_sif_nirv_cs_all, paste0(out_dir, out_name, "sif_nirv_cs_all.csv"), row.names = FALSE)
-
-ts_sif_nirv_cs_cold_2019 <- get_ts(files_2019, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_nirv_cs_cold_2020 <- get_ts(files_2020, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_nirv_cs_cold_2021 <- get_ts(files_2021, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_nirv_cs_cold      <- rbind(ts_sif_nirv_cs_cold_2019, ts_sif_nirv_cs_cold_2020, ts_sif_nirv_cs_cold_2021)
-write.csv(ts_sif_nirv_cs_cold, paste0(out_dir, out_name, "sif_nirv_cs_cold.csv"), row.names = FALSE)
-
-ts_sif_nirv_cf_cold_2019 <- get_ts(files_2019, "SIF_NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_nirv_cf_cold_2020 <- get_ts(files_2020, "SIF_NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_nirv_cf_cold_2021 <- get_ts(files_2021, "SIF_NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_nirv_cf_cold      <- rbind(ts_sif_nirv_cf_cold_2019, ts_sif_nirv_cf_cold_2020, ts_sif_nirv_cf_cold_2021)
-write.csv(ts_sif_nirv_cf_cold, paste0(out_dir, out_name, "sif_nirv_cf_cold.csv"), row.names = FALSE)
-
-# #SIF
-# ts_sif_all_2019 <- get_ts(files_2019, "SIF_743", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_sif_all_2020 <- get_ts(files_2020, "SIF_743", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_sif_all_2021 <- get_ts(files_2021, "SIF_743", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_sif_all      <- rbind(ts_sif_all_2019, ts_sif_all_2020, ts_sif_all_2021)
-# write.csv(ts_sif_all, paste0(out_dir, out_name, "sif_all.csv"), row.names = FALSE)
-# 
-# ts_sif_cs_all_2019 <- get_ts(files_2019, "SIF_743", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_sif_cs_all_2020 <- get_ts(files_2020, "SIF_743", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_sif_cs_all_2021 <- get_ts(files_2021, "SIF_743", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_sif_cs_all      <- rbind(ts_sif_cs_all_2019, ts_sif_cs_all_2020, ts_sif_cs_all_2021)
-# write.csv(ts_sif_cs_all, paste0(out_dir, out_name, "sif_cs_all.csv"), row.names = FALSE)
-# 
-# ts_sif_cs_cold_2019 <- get_ts(files_2019, "SIF_743", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_sif_cs_cold_2020 <- get_ts(files_2020, "SIF_743", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_sif_cs_cold_2021 <- get_ts(files_2021, "SIF_743", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_sif_cs_cold      <- rbind(ts_sif_cs_cold_2019, ts_sif_cs_cold_2020, ts_sif_cs_cold_2021)
-# write.csv(ts_sif_cs_cold, paste0(out_dir, out_name, "sif_cs_cold.csv"), row.names = FALSE)
-# 
-# ts_sif_cf_cold_2019 <- get_ts(files_2019, "SIF_743", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_sif_cf_cold_2020 <- get_ts(files_2020, "SIF_743", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_sif_cf_cold_2021 <- get_ts(files_2021, "SIF_743", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_sif_cf_cold      <- rbind(ts_sif_cf_cold_2019, ts_sif_cf_cold_2020, ts_sif_cf_cold_2021)
-# write.csv(ts_sif_cf_cold, paste0(out_dir, out_name, "sif_cf_cold.csv"), row.names = FALSE)
-# 
-# # NIRv
-# ts_nirv_all_2019 <- get_ts(files_2019, "NIRv", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirv_all_2020 <- get_ts(files_2020, "NIRv", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirv_all_2021 <- get_ts(files_2021, "NIRv", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirv_all      <- rbind(ts_nirv_all_2019, ts_nirv_all_2020, ts_nirv_all_2021)
-# write.csv(ts_nirv_all, paste0(out_dir, out_name, "nirv_all.csv"), row.names = FALSE)
-# 
-# ts_nirv_cs_all_2019 <- get_ts(files_2019, "NIRv", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirv_cs_all_2020 <- get_ts(files_2020, "NIRv", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirv_cs_all_2021 <- get_ts(files_2021, "NIRv", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirv_cs_all      <- rbind(ts_nirv_cs_all_2019, ts_nirv_cs_all_2020, ts_nirv_cs_all_2021)
-# write.csv(ts_nirv_cs_all, paste0(out_dir, out_name, "nirv_cs_all.csv"), row.names = FALSE)
-# 
-# ts_nirv_cs_cold_2019 <- get_ts(files_2019, "NIRv", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirv_cs_cold_2020 <- get_ts(files_2020, "NIRv", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirv_cs_cold_2021 <- get_ts(files_2021, "NIRv", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirv_cs_cold      <- rbind(ts_nirv_cs_cold_2019, ts_nirv_cs_cold_2020, ts_nirv_cs_cold_2021)
-# write.csv(ts_nirv_cs_cold, paste0(out_dir, out_name, "nirv_cs_cold.csv"), row.names = FALSE)
-# 
-# ts_nirv_cf_cold_2019 <- get_ts(files_2019, "NIRv", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirv_cf_cold_2020 <- get_ts(files_2020, "NIRv", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirv_cf_cold_2021 <- get_ts(files_2021, "NIRv", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirv_cf_cold      <- rbind(ts_nirv_cf_cold_2019, ts_nirv_cf_cold_2020, ts_nirv_cf_cold_2021)
-# write.csv(ts_nirv_cf_cold, paste0(out_dir, out_name, "nirv_cf_cold.csv"), row.names = FALSE)
-# 
-# # NIRv R
-# ts_nirvr_all_2019 <- get_ts(files_2019, "NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirvr_all_2020 <- get_ts(files_2020, "NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirvr_all_2021 <- get_ts(files_2021, "NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirvr_all      <- rbind(ts_nirvr_all_2019, ts_nirvr_all_2020, ts_nirvr_all_2021)
-# write.csv(ts_nirvr_all, paste0(out_dir, out_name, "nirvr_all.csv"), row.names = FALSE)
-# 
-# ts_nirvr_cs_all_2019 <- get_ts(files_2019, "NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirvr_cs_all_2020 <- get_ts(files_2020, "NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirvr_cs_all_2021 <- get_ts(files_2021, "NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirvr_cs_all      <- rbind(ts_nirvr_cs_all_2019, ts_nirvr_cs_all_2020, ts_nirvr_cs_all_2021)
-# write.csv(ts_nirvr_cs_all, paste0(out_dir, out_name, "nirvr_cs_all.csv"), row.names = FALSE)
-# 
-# ts_nirvr_cs_cold_2019 <- get_ts(files_2019, "NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirvr_cs_cold_2020 <- get_ts(files_2020, "NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirvr_cs_cold_2021 <- get_ts(files_2021, "NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirvr_cs_cold      <- rbind(ts_nirvr_cs_cold_2019, ts_nirvr_cs_cold_2020, ts_nirvr_cs_cold_2021)
-# write.csv(ts_nirvr_cs_cold, paste0(out_dir, out_name, "nirvr_cs_cold.csv"), row.names = FALSE)
-# 
-# ts_nirvr_cf_cold_2019 <- get_ts(files_2019, "NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirvr_cf_cold_2020 <- get_ts(files_2020, "NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirvr_cf_cold_2021 <- get_ts(files_2021, "NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirvr_cf_cold      <- rbind(ts_nirvr_cf_cold_2019, ts_nirvr_cf_cold_2020, ts_nirvr_cf_cold_2021)
-# write.csv(ts_nirvr_cf_cold, paste0(out_dir, out_name, "nirvr_cf_cold.csv"), row.names = FALSE)
-# 
-# # Red
-# ts_red_all_2019 <- get_ts(files_2019, "RED", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_red_all_2020 <- get_ts(files_2020, "RED", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_red_all_2021 <- get_ts(files_2021, "RED", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_red_all      <- rbind(ts_red_all_2019, ts_red_all_2020, ts_red_all_2021)
-# write.csv(ts_red_all, paste0(out_dir, out_name, "red_all.csv"), row.names = FALSE)
-# 
-# ts_red_cs_all_2019 <- get_ts(files_2019, "RED", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_red_cs_all_2020 <- get_ts(files_2020, "RED", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_red_cs_all_2021 <- get_ts(files_2021, "RED", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_red_cs_all      <- rbind(ts_red_cs_all_2019, ts_red_cs_all_2020, ts_red_cs_all_2021)
-# write.csv(ts_red_cs_all, paste0(out_dir, out_name, "red_cs_all.csv"), row.names = FALSE)
-# 
-# ts_red_cs_cold_2019 <- get_ts(files_2019, "RED", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_red_cs_cold_2020 <- get_ts(files_2020, "RED", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_red_cs_cold_2021 <- get_ts(files_2021, "RED", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_red_cs_cold      <- rbind(ts_red_cs_cold_2019, ts_red_cs_cold_2020, ts_red_cs_cold_2021)
-# write.csv(ts_red_cs_cold, paste0(out_dir, out_name, "red_cs_cold.csv"), row.names = FALSE)
-# 
-# ts_red_cf_cold_2019 <- get_ts(files_2019, "RED", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_red_cf_cold_2020 <- get_ts(files_2020, "RED", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_red_cf_cold_2021 <- get_ts(files_2021, "RED", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_red_cf_cold      <- rbind(ts_red_cf_cold_2019, ts_red_cf_cold_2020, ts_red_cf_cold_2021)
-# write.csv(ts_red_cf_cold, paste0(out_dir, out_name, "red_cf_cold.csv"), row.names = FALSE)
-# 
-# # NIR
-# ts_nir_all_2019 <- get_ts(files_2019, "NIR", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nir_all_2020 <- get_ts(files_2020, "NIR", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nir_all_2021 <- get_ts(files_2021, "NIR", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nir_all      <- rbind(ts_nir_all_2019, ts_nir_all_2020, ts_nir_all_2021)
-# write.csv(ts_nir_all, paste0(out_dir, out_name, "nir_all.csv"), row.names = FALSE)
-# 
-# ts_nir_cs_all_2019 <- get_ts(files_2019, "NIR", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nir_cs_all_2020 <- get_ts(files_2020, "NIR", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nir_cs_all_2021 <- get_ts(files_2021, "NIR", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nir_cs_all      <- rbind(ts_nir_cs_all_2019, ts_nir_cs_all_2020, ts_nir_cs_all_2021)
-# write.csv(ts_nir_cs_all, paste0(out_dir, out_name, "nir_cs_all.csv"), row.names = FALSE)
-# 
-# ts_nir_cs_cold_2019 <- get_ts(files_2019, "NIR", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nir_cs_cold_2020 <- get_ts(files_2020, "NIR", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nir_cs_cold_2021 <- get_ts(files_2021, "NIR", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nir_cs_cold      <- rbind(ts_nir_cs_cold_2019, ts_nir_cs_cold_2020, ts_nir_cs_cold_2021)
-# write.csv(ts_nir_cs_cold, paste0(out_dir, out_name, "nir_cs_cold.csv"), row.names = FALSE)
-# 
-# ts_nir_cf_cold_2019 <- get_ts(files_2019, "NIR", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nir_cf_cold_2020 <- get_ts(files_2020, "NIR", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nir_cf_cold_2021 <- get_ts(files_2021, "NIR", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nir_cf_cold      <- rbind(ts_nir_cf_cold_2019, ts_nir_cf_cold_2020, ts_nir_cf_cold_2021)
-# write.csv(ts_nir_cf_cold, paste0(out_dir, out_name, "nir_cf_cold.csv"), row.names = FALSE)
-
-#### SEAsia ####
-out_dir    <- "G:/SIF_comps/csv/seasia/monthly"
-out_name   <- "/SEAsia_2019-2021_monthly_"
-files_2019 <- file_df("G:/TROPOMI/esa/extracted/ebf/seasia/2019", 2019, "month")
-files_2020 <- file_df("G:/TROPOMI/esa/extracted/ebf/seasia/2020", 2020, "month")
-files_2021 <- file_df("G:/TROPOMI/esa/extracted/ebf/seasia/2021", 2021, "month")
-
-# SIF relative
-ts_sif_rel_all_2019 <- get_ts(files_2019, "SIF_Rel", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_rel_all_2020 <- get_ts(files_2020, "SIF_Rel", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_rel_all_2021 <- get_ts(files_2021, "SIF_Rel", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_rel_all      <- rbind(ts_sif_rel_all_2019, ts_sif_rel_all_2020, ts_sif_rel_all_2021)
-write.csv(ts_sif_rel_all, paste0(out_dir, out_name, "sif_rel_all.csv"), row.names = FALSE)
-
-ts_sif_rel_cs_all_2019 <- get_ts(files_2019, "SIF_Rel", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_rel_cs_all_2020 <- get_ts(files_2020, "SIF_Rel", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_rel_cs_all_2021 <- get_ts(files_2021, "SIF_Rel", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_rel_cs_all      <- rbind(ts_sif_rel_cs_all_2019, ts_sif_rel_cs_all_2020, ts_sif_rel_cs_all_2021)
-write.csv(ts_sif_rel_cs_all, paste0(out_dir, out_name, "sif_rel_cs_all.csv"), row.names = FALSE)
-
-ts_sif_rel_cs_cold_2019 <- get_ts(files_2019, "SIF_Rel", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_rel_cs_cold_2020 <- get_ts(files_2020, "SIF_Rel", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_rel_cs_cold_2021 <- get_ts(files_2021, "SIF_Rel", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_rel_cs_cold      <- rbind(ts_sif_rel_cs_cold_2019, ts_sif_rel_cs_cold_2020, ts_sif_rel_cs_cold_2021)
-write.csv(ts_sif_rel_cs_cold, paste0(out_dir, out_name, "sif_rel_cs_cold.csv"), row.names = FALSE)
-
-ts_sif_rel_cf_cold_2019 <- get_ts(files_2019, "SIF_Rel", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_rel_cf_cold_2020 <- get_ts(files_2020, "SIF_Rel", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_rel_cf_cold_2021 <- get_ts(files_2021, "SIF_Rel", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_rel_cf_cold      <- rbind(ts_sif_rel_cf_cold_2019, ts_sif_rel_cf_cold_2020, ts_sif_rel_cf_cold_2021)
-write.csv(ts_sif_rel_cf_cold, paste0(out_dir, out_name, "sif_rel_cf_cold.csv"), row.names = FALSE)
-
-# SIF / NIRv_RAD
-ts_sif_nirv_all_2019 <- get_ts(files_2019, "SIF_NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_nirv_all_2020 <- get_ts(files_2020, "SIF_NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_nirv_all_2021 <- get_ts(files_2021, "SIF_NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-ts_sif_nirv_all      <- rbind(ts_sif_nirv_all_2019, ts_sif_nirv_all_2020, ts_sif_nirv_all_2021)
-write.csv(ts_sif_nirv_all, paste0(out_dir, out_name, "sif_nirv_all.csv"), row.names = FALSE)
-
-ts_sif_nirv_cs_all_2019 <- get_ts(files_2019, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_nirv_cs_all_2020 <- get_ts(files_2020, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_nirv_cs_all_2021 <- get_ts(files_2021, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-ts_sif_nirv_cs_all      <- rbind(ts_sif_nirv_cs_all_2019, ts_sif_nirv_cs_all_2020, ts_sif_nirv_cs_all_2021)
-write.csv(ts_sif_nirv_cs_all, paste0(out_dir, out_name, "sif_nirv_cs_all.csv"), row.names = FALSE)
-
-ts_sif_nirv_cs_cold_2019 <- get_ts(files_2019, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_nirv_cs_cold_2020 <- get_ts(files_2020, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_nirv_cs_cold_2021 <- get_ts(files_2021, "SIF_NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-ts_sif_nirv_cs_cold      <- rbind(ts_sif_nirv_cs_cold_2019, ts_sif_nirv_cs_cold_2020, ts_sif_nirv_cs_cold_2021)
-write.csv(ts_sif_nirv_cs_cold, paste0(out_dir, out_name, "sif_nirv_cs_cold.csv"), row.names = FALSE)
-
-ts_sif_nirv_cf_cold_2019 <- get_ts(files_2019, "SIF_NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_nirv_cf_cold_2020 <- get_ts(files_2020, "SIF_NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_nirv_cf_cold_2021 <- get_ts(files_2021, "SIF_NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-ts_sif_nirv_cf_cold      <- rbind(ts_sif_nirv_cf_cold_2019, ts_sif_nirv_cf_cold_2020, ts_sif_nirv_cf_cold_2021)
-write.csv(ts_sif_nirv_cf_cold, paste0(out_dir, out_name, "sif_nirv_cf_cold.csv"), row.names = FALSE)
-
-# # SIF
-# ts_sif_all_2019 <- get_ts(files_2019, "SIF_743", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_sif_all_2020 <- get_ts(files_2020, "SIF_743", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_sif_all_2021 <- get_ts(files_2021, "SIF_743", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_sif_all      <- rbind(ts_sif_all_2019, ts_sif_all_2020, ts_sif_all_2021)
-# write.csv(ts_sif_all, paste0(out_dir, out_name, "sif_all.csv"), row.names = FALSE)
-# 
-# ts_sif_cs_all_2019 <- get_ts(files_2019, "SIF_743", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_sif_cs_all_2020 <- get_ts(files_2020, "SIF_743", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_sif_cs_all_2021 <- get_ts(files_2021, "SIF_743", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_sif_cs_all      <- rbind(ts_sif_cs_all_2019, ts_sif_cs_all_2020, ts_sif_cs_all_2021)
-# write.csv(ts_sif_cs_all, paste0(out_dir, out_name, "sif_cs_all.csv"), row.names = FALSE)
-# 
-# ts_sif_cs_cold_2019 <- get_ts(files_2019, "SIF_743", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_sif_cs_cold_2020 <- get_ts(files_2020, "SIF_743", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_sif_cs_cold_2021 <- get_ts(files_2021, "SIF_743", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_sif_cs_cold      <- rbind(ts_sif_cs_cold_2019, ts_sif_cs_cold_2020, ts_sif_cs_cold_2021)
-# write.csv(ts_sif_cs_cold, paste0(out_dir, out_name, "sif_cs_cold.csv"), row.names = FALSE)
-# 
-# ts_sif_cf_cold_2019 <- get_ts(files_2019, "SIF_743", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_sif_cf_cold_2020 <- get_ts(files_2020, "SIF_743", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_sif_cf_cold_2021 <- get_ts(files_2021, "SIF_743", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_sif_cf_cold      <- rbind(ts_sif_cf_cold_2019, ts_sif_cf_cold_2020, ts_sif_cf_cold_2021)
-# write.csv(ts_sif_cf_cold, paste0(out_dir, out_name, "sif_cf_cold.csv"), row.names = FALSE)
-# 
-# # NIRv
-# ts_nirv_all_2019 <- get_ts(files_2019, "NIRv", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirv_all_2020 <- get_ts(files_2020, "NIRv", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirv_all_2021 <- get_ts(files_2021, "NIRv", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirv_all      <- rbind(ts_nirv_all_2019, ts_nirv_all_2020, ts_nirv_all_2021)
-# write.csv(ts_nirv_all, paste0(out_dir, out_name, "nirv_all.csv"), row.names = FALSE)
-# 
-# ts_nirv_cs_all_2019 <- get_ts(files_2019, "NIRv", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirv_cs_all_2020 <- get_ts(files_2020, "NIRv", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirv_cs_all_2021 <- get_ts(files_2021, "NIRv", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirv_cs_all      <- rbind(ts_nirv_cs_all_2019, ts_nirv_cs_all_2020, ts_nirv_cs_all_2021)
-# write.csv(ts_nirv_cs_all, paste0(out_dir, out_name, "nirv_cs_all.csv"), row.names = FALSE)
-# 
-# ts_nirv_cs_cold_2019 <- get_ts(files_2019, "NIRv", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirv_cs_cold_2020 <- get_ts(files_2020, "NIRv", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirv_cs_cold_2021 <- get_ts(files_2021, "NIRv", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirv_cs_cold      <- rbind(ts_nirv_cs_cold_2019, ts_nirv_cs_cold_2020, ts_nirv_cs_cold_2021)
-# write.csv(ts_nirv_cs_cold, paste0(out_dir, out_name, "nirv_cs_cold.csv"), row.names = FALSE)
-# 
-# ts_nirv_cf_cold_2019 <- get_ts(files_2019, "NIRv", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirv_cf_cold_2020 <- get_ts(files_2020, "NIRv", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirv_cf_cold_2021 <- get_ts(files_2021, "NIRv", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirv_cf_cold      <- rbind(ts_nirv_cf_cold_2019, ts_nirv_cf_cold_2020, ts_nirv_cf_cold_2021)
-# write.csv(ts_nirv_cf_cold, paste0(out_dir, out_name, "nirv_cf_cold.csv"), row.names = FALSE)
-# 
-# # NIRv R
-# ts_nirvr_all_2019 <- get_ts(files_2019, "NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirvr_all_2020 <- get_ts(files_2020, "NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirvr_all_2021 <- get_ts(files_2021, "NIRv_RAD", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nirvr_all      <- rbind(ts_nirvr_all_2019, ts_nirvr_all_2020, ts_nirvr_all_2021)
-# write.csv(ts_nirvr_all, paste0(out_dir, out_name, "nirvr_all.csv"), row.names = FALSE)
-# 
-# ts_nirvr_cs_all_2019 <- get_ts(files_2019, "NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirvr_cs_all_2020 <- get_ts(files_2020, "NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirvr_cs_all_2021 <- get_ts(files_2021, "NIRv_RAD", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nirvr_cs_all      <- rbind(ts_nirvr_cs_all_2019, ts_nirvr_cs_all_2020, ts_nirvr_cs_all_2021)
-# write.csv(ts_nirvr_cs_all, paste0(out_dir, out_name, "nirvr_cs_all.csv"), row.names = FALSE)
-# 
-# ts_nirvr_cs_cold_2019 <- get_ts(files_2019, "NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirvr_cs_cold_2020 <- get_ts(files_2020, "NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirvr_cs_cold_2021 <- get_ts(files_2021, "NIRv_RAD", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nirvr_cs_cold      <- rbind(ts_nirvr_cs_cold_2019, ts_nirvr_cs_cold_2020, ts_nirvr_cs_cold_2021)
-# write.csv(ts_nirvr_cs_cold, paste0(out_dir, out_name, "nirvr_cs_cold.csv"), row.names = FALSE)
-# 
-# ts_nirvr_cf_cold_2019 <- get_ts(files_2019, "NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirvr_cf_cold_2020 <- get_ts(files_2020, "NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirvr_cf_cold_2021 <- get_ts(files_2021, "NIRv_RAD", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nirvr_cf_cold      <- rbind(ts_nirvr_cf_cold_2019, ts_nirvr_cf_cold_2020, ts_nirvr_cf_cold_2021)
-# write.csv(ts_nirvr_cf_cold, paste0(out_dir, out_name, "nirvr_cf_cold.csv"), row.names = FALSE)
-# 
-# # Red
-# ts_red_all_2019 <- get_ts(files_2019, "RED", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_red_all_2020 <- get_ts(files_2020, "RED", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_red_all_2021 <- get_ts(files_2021, "RED", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_red_all      <- rbind(ts_red_all_2019, ts_red_all_2020, ts_red_all_2021)
-# write.csv(ts_red_all, paste0(out_dir, out_name, "red_all.csv"), row.names = FALSE)
-# 
-# ts_red_cs_all_2019 <- get_ts(files_2019, "RED", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_red_cs_all_2020 <- get_ts(files_2020, "RED", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_red_cs_all_2021 <- get_ts(files_2021, "RED", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_red_cs_all      <- rbind(ts_red_cs_all_2019, ts_red_cs_all_2020, ts_red_cs_all_2021)
-# write.csv(ts_red_cs_all, paste0(out_dir, out_name, "red_cs_all.csv"), row.names = FALSE)
-# 
-# ts_red_cs_cold_2019 <- get_ts(files_2019, "RED", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_red_cs_cold_2020 <- get_ts(files_2020, "RED", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_red_cs_cold_2021 <- get_ts(files_2021, "RED", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_red_cs_cold      <- rbind(ts_red_cs_cold_2019, ts_red_cs_cold_2020, ts_red_cs_cold_2021)
-# write.csv(ts_red_cs_cold, paste0(out_dir, out_name, "red_cs_cold.csv"), row.names = FALSE)
-# 
-# ts_red_cf_cold_2019 <- get_ts(files_2019, "RED", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_red_cf_cold_2020 <- get_ts(files_2020, "RED", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_red_cf_cold_2021 <- get_ts(files_2021, "RED", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_red_cf_cold      <- rbind(ts_red_cf_cold_2019, ts_red_cf_cold_2020, ts_red_cf_cold_2021)
-# write.csv(ts_red_cf_cold, paste0(out_dir, out_name, "red_cf_cold.csv"), row.names = FALSE)
-# 
-# # NIR
-# ts_nir_all_2019 <- get_ts(files_2019, "NIR", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nir_all_2020 <- get_ts(files_2020, "NIR", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nir_all_2021 <- get_ts(files_2021, "NIR", "month", c("LC_PERC_2020"), c(90), c("gt"))
-# ts_nir_all      <- rbind(ts_nir_all_2019, ts_nir_all_2020, ts_nir_all_2021)
-# write.csv(ts_nir_all, paste0(out_dir, out_name, "nir_all.csv"), row.names = FALSE)
-# 
-# ts_nir_cs_all_2019 <- get_ts(files_2019, "NIR", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nir_cs_all_2020 <- get_ts(files_2020, "NIR", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nir_cs_all_2021 <- get_ts(files_2021, "NIR", "month", c("cloud_fraction_L2", "LC_PERC_2020"), c(0, 90), c("eq", "gt"))
-# ts_nir_cs_all      <- rbind(ts_nir_cs_all_2019, ts_nir_cs_all_2020, ts_nir_cs_all_2021)
-# write.csv(ts_nir_cs_all, paste0(out_dir, out_name, "nir_cs_all.csv"), row.names = FALSE)
-# 
-# ts_nir_cs_cold_2019 <- get_ts(files_2019, "NIR", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nir_cs_cold_2020 <- get_ts(files_2020, "NIR", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nir_cs_cold_2021 <- get_ts(files_2021, "NIR", "month", c("cloud_fraction_L2", "phase_angle", "LC_PERC_2020"), c(0, 20, 90), c("eq", "gt", "gt"))
-# ts_nir_cs_cold      <- rbind(ts_nir_cs_cold_2019, ts_nir_cs_cold_2020, ts_nir_cs_cold_2021)
-# write.csv(ts_nir_cs_cold, paste0(out_dir, out_name, "nir_cs_cold.csv"), row.names = FALSE)
-# 
-# ts_nir_cf_cold_2019 <- get_ts(files_2019, "NIR", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nir_cf_cold_2020 <- get_ts(files_2020, "NIR", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nir_cf_cold_2021 <- get_ts(files_2021, "NIR", "month", c("phase_angle", "LC_PERC_2020"), c(20, 90), c("gt", "gt"))
-# ts_nir_cf_cold      <- rbind(ts_nir_cf_cold_2019, ts_nir_cf_cold_2020, ts_nir_cf_cold_2021)
-# write.csv(ts_nir_cf_cold, paste0(out_dir, out_name, "nir_cf_cold.csv"), row.names = FALSE)
+### K67 ###
+out_name <- "/K67_2001-2004_monthly_"
+years    <- c(2001, 2002, 2003, 2004)
+roi      <- vect("G:/SIF_comps/figs/EC_Sites/K67/K67_ebf.shp")
+df_f     <- list_nc(in_dir, years, vi_list)
+get_ts(df_f, vi_list, out_dir, roi, lc_filter)
