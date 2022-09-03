@@ -76,28 +76,28 @@ get_ts  <- function(df_f, vi_list, out_dir, roi, lc_filter) {
 
 ### RJA ###
 out_name <- "/RJA_2001-2002_monthly_"
-years    <- c(2001, 2002)
+years    <- c(2001:2002)
 roi      <- vect("G:/SIF_comps/figs/EC_Sites/RJA/RJA_ebf.shp")
 df_f     <- list_nc(in_dir, years, vi_list)
 get_ts(df_f, vi_list, out_dir, roi, lc_filter)
 
 ### CAX ###
 out_name <- "/CAX_2001-2003_monthly_"
-years    <- c(2001, 2002, 2003)
+years    <- c(2001:2003)
 roi      <- vect("G:/SIF_comps/figs/EC_Sites/CAX/CAX_ebf.shp")
 df_f     <- list_nc(in_dir, years, vi_list)
 get_ts(df_f, vi_list, out_dir, roi, lc_filter)
 
 ### K34 ###
-out_name <- "/K34_2001-2004_monthly_"
-years    <- c(2001, 2002, 2003, 2004)
+out_name <- "/K34_2001-2006_monthly_"
+years    <- c(2001:2006)
 roi      <- vect("G:/SIF_comps/figs/EC_Sites/K34/K34_ebf.shp")
 df_f     <- list_nc(in_dir, years, vi_list)
 get_ts(df_f, vi_list, out_dir, roi, lc_filter)
 
 ### K67 ###
-out_name <- "/K67_2001-2004_monthly_"
-years    <- c(2001, 2002, 2003, 2004)
+out_name <- "/K67_2002-2005_2009-2011_monthly_"
+years    <- c(2002:2005,2009:2011)
 roi      <- vect("G:/SIF_comps/figs/EC_Sites/K67/K67_ebf.shp")
 df_f     <- list_nc(in_dir, years, vi_list)
 get_ts(df_f, vi_list, out_dir, roi, lc_filter)
