@@ -4,8 +4,8 @@ library(terra)
 in_dir     <- "G:/MCD43C4/v061/nc/daily/0.05"
 vi_list    <- c("EVI", "NDVI", "NIRv", "LSWI", "RED", "NIR")
 out_dir    <- "G:/SIF_comps/csv/mcd43c4"
-out_name   <- "/Amazon_EBF90_2019-2021_monthly_"
-years      <- c(2019:2021)
+out_name   <- "/Amazon_EBF90_2001-06_2009-11_2019-21_monthly_"
+years      <- c(2001:2006, 2009:2011, 2019:2021)
 roi        <- vect("G:/Amazon_shp/Amazon_poly.shp")
 
 
