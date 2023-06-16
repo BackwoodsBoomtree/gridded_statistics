@@ -4,18 +4,28 @@ library(terra)
 in_file     <- "G:/ERA5/tropical_africa/era5_tropical_africa.nc"
 out_dir     <- "G:ERA5/tropical_africa_ecoregions"
 out_name    <- "/Africa_ERA5_2019-2022_"
-ecos_dir    <- ""
+ecos_dir    <- "G:/Africa/Tropical_Africa_Ecoregions/ecoregions"
 forest_mask <- "G:/Africa/Forest_Masks/dissolved/Africa_merged_2019_2.5km_Buffer.shp"
-ecos_polys <- list.files(in_dir, pattern = "*.shp", full.names = TRUE, recursive = TRUE)
+ecos_polys  <- list.files(ecos_dir, pattern = "*.shp", full.names = TRUE, recursive = TRUE)
 
+# Get ERA5 data and mask by forest
+era5_data   <- sds(in_file)
+f_mask      <- vect(forest_mask)
+
+# Can't mask a SpatialRasterDataset, so have to do it for each variable
+d2m        <- era5_data$d2m
+d2m_forest <- mask(d2m, f_mask)
+
+# Test ecoregion mask
+d2m_egf    <- mask(d2m_forest, vect(ecos_polys[7]))
 
 # Prepare land cover class and % filter
 lc_filter <- rast("G:/MCD12C1/2020/reprocessed/percent/MCD12C1.A2020001.006.Percent_LC_03.tif")
 lc_filter[lc_filter < 90] <- NA
 
-# if (!dir.exists(out_dir)) {
-#   dir.create(out_dir, recursive = TRUE)
-# }
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir, recursive = TRUE)
+}
 
 list_nc <- function(in_dir, years, vi_list) {
   # Create a df of file names for each VI and year.
