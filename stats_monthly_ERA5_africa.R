@@ -1,12 +1,16 @@
 library(terra)
-# library(ncdf4)
+library(stringr)
+# library(plantecophys)
 
 in_file     <- "G:/ERA5/tropical_africa/era5_tropical_africa.nc"
-out_dir     <- "G:ERA5/tropical_africa_ecoregions"
+out_dir     <- "G:/ERA5/tropical_africa_ecoregions"
 out_name    <- "/Africa_ERA5_2019-2022_"
 ecos_dir    <- "G:/Africa/Tropical_Africa_Ecoregions/ecoregions"
 forest_mask <- "G:/Africa/Forest_Masks/dissolved/Africa_merged_2019_2.5km_Buffer.shp"
 ecos_polys  <- list.files(ecos_dir, pattern = "*.shp", full.names = TRUE, recursive = TRUE)
+
+# Remove unneeded ecoregions
+ecos_polys <- ecos_polys[-c(4, 8, 9, 11)]
 
 # Get ERA5 data and mask by forest
 era5_data   <- sds(in_file)
@@ -14,80 +18,64 @@ f_mask      <- vect(forest_mask)
 
 # Can't mask a SpatialRasterDataset, so have to do it for each variable
 d2m        <- era5_data$d2m
-d2m_forest <- mask(d2m, f_mask)
+t2m        <- era5_data$t2m
+evavt      <- era5_data$evavt
+ssrd       <- era5_data$ssrd
+e          <- era5_data$e
+tp         <- era5_data$tp
 
-# Test ecoregion mask
-d2m_egf    <- mask(d2m_forest, vect(ecos_polys[7]))
+# Convert to C, mm, and W/m2
+d2m <- d2m - 273.15
+t2m <- t2m - 273.15
+tp  <- tp * 1000
+par <- ssrd / 86400 * 0.47 # 86400 converts from J to W and 0.47 is for PAR
 
-# Prepare land cover class and % filter
-lc_filter <- rast("G:/MCD12C1/2020/reprocessed/percent/MCD12C1.A2020001.006.Percent_LC_03.tif")
-lc_filter[lc_filter < 90] <- NA
+# Drop temps <= 0 for vpd calculation
+t2m[t2m <= 0] <- NA
 
-if (!dir.exists(out_dir)) {
-  dir.create(out_dir, recursive = TRUE)
+# Calculations from Monteith and Unsworth (2008) for temps above 0 deg C.
+es       <- 0.61078 * exp((17.267 * t2m) / (237.3 + t2m)) # saturation vapor pressure or vapor pressure at air temperature
+ea       <- 0.61078 * exp((17.267 * d2m) / (237.3 + d2m)) # actual vapor pressure or vapor pressure at dewpoint temperature
+# rh       <- ea / es * 100
+vpd <- es - ea
+
+# Clip to forest
+d2m_forest   <- mask(d2m, f_mask)
+t2m_forest   <- mask(t2m, f_mask)
+evavt_forest <- mask(evavt, f_mask)
+par_forest   <- mask(par, f_mask)
+e_forest     <- mask(e, f_mask)
+tp_forest    <- mask(tp, f_mask)
+vpd_forest   <- mask(vpd, f_mask)
+
+# Fuction below can be used - result is the same as using equations
+# vpd_forest   <- DewtoVPD(d2m, t2m)
+
+
+for (i in 1:length(ecos_polys)){
+  
+  eco      <- vect(ecos_polys[i])
+  eco_name <- str_to_title(eco$ECO_NAME)
+  eco_name <- gsub(" ", "_", eco_name)
+  
+  d2m_eco   <- mask(d2m_forest, eco)
+  t2m_eco   <- mask(t2m_forest, eco)
+  evavt_eco <- mask(evavt_forest, eco)
+  par_eco   <- mask(par_forest, eco)
+  e_eco     <- mask(e_forest, eco)
+  tp_eco    <- mask(tp_forest, eco)
+  vpd_eco   <- mask(vpd_forest, eco)
+  
+  eco_data            <- sds(d2m_eco, t2m_eco, evavt_eco, par_eco, e_eco, tp_eco, vpd_eco)
+  names(eco_data)     <- c(names(era5_data)[1:3], "par",
+                           names(era5_data)[5:6], "vpd")
+  longnames(eco_data) <- c(longnames(era5_data)[1:3], "Photosynthetically Active Radiation",
+                           longnames(era5_data)[5:6], "Vapor Pressure Deficit")
+  units(eco_data)     <- c("C", "C", "m of water equivalent", "W/m-2", "m of water equivalent", "mm", "kPa")
+  
+  out_save <- paste0(out_dir, out_name, eco_name, ".nc")
+  
+  writeCDF(eco_data, out_save, overwrite = TRUE, compression = 4, missval = -9999)
+  message(paste0("Done! Saved ", out_save))
+  
 }
-
-list_nc <- function(in_dir, years, vi_list) {
-  # Create a df of file names for each VI and year.
-  # These are monthly files.
-  
-  ncs <- list.files(in_dir, pattern = "*.nc", full.names = TRUE, recursive = TRUE)
-  
-  for (i in 1:length(vi_list)) {
-    
-    vi_ncs <- ncs[grepl(paste0(vi_list[i], "\\."), ncs)]
-    
-    for (j in 1:length(years)) {
-      year_ncs <- vi_ncs[grepl(years[j], vi_ncs)]
-      
-      if (j == 1) {
-        year_out_ncs <- year_ncs
-      } else {
-        year_out_ncs <- c(year_out_ncs, year_ncs)
-      }
-    }
-    
-    if (i == 1) {
-      df <- year_out_ncs
-    } else {
-      df <- cbind(df, year_out_ncs)
-    }
-    # year_out_ncs        <- data.frame(year_out_ncs)
-  }
-  colnames(df) <- vi_list
-  return(df)
-}
-get_ts  <- function(df_f, vi_list, out_dir, roi, lc_filter) {
-  
-  lc_filter <- crop(lc_filter, roi, mask = TRUE, touches = TRUE)
-  
-  for (i in 1:length(vi_list)) {
-    vi_files <- df_f[,i]
-    
-    for (j in 1:length(vi_files)) {
-      rast_t <- rast(vi_files[j])
-      rast_t <- crop(rast_t, roi, mask = TRUE, touches = TRUE)
-      rast_t <- mask(rast_t, lc_filter)
-      m      <- mean(values(rast_t), na.rm = TRUE)
-      n      <- length(values(rast_t))
-      sd     <- sd(values(rast_t), na.rm = TRUE)
-      sem    <- sd / sqrt(n)
-      
-      row    <- cbind(m, n, sd, sem)
-      
-      if (j == 1) {
-        df <- row
-      } else {
-        df <- rbind(df, row)
-      }
-    }
-    names(df)     <- c("mean", "n", "sd", "sem")
-    full_out_name <- paste0(out_dir, out_name, vi_list[i], ".csv")
-    write.csv(df, full_out_name, row.names = FALSE)
-    message(paste0("Saved ", full_out_name))
-  }
-}
-
-
-df_f     <- list_nc(in_dir, years, vi_list)
-get_ts(df_f, vi_list, out_dir, roi, lc_filter)
